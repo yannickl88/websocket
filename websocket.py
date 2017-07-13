@@ -279,6 +279,12 @@ class HttpMessage(SocketMessage):
 
         return int(status) if len(status) > 0 else 500
 
+    def headers(self) -> dict:
+        """
+        Return all headers value.
+        """
+        return self.data[1]
+
     def header(self, key: str) -> str:
         """
         Return a header value.
@@ -344,21 +350,45 @@ class SocketKey:
         return key == base64.b64encode(hashlib.sha1((self._key + server_uuid).encode('utf-8')).digest()).decode()
 
 
+class SocketFactory:
+    """
+    Socket factory which can create sockets.
+    """
+
+    def create(self):
+        """
+        Create a socket.
+        """
+        return socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+
+class SslSocketFactory(SocketFactory):
+    """
+    Ssl socket factory which can create sockets which use a secure connection.
+    """
+
+    def create(self):
+        """
+        Create a socket.
+        """
+        return ssl.wrap_socket(SocketFactory.create(self))
+
+
 class WebSocket:
     """
     Connection used to open en close the websocket connection. Call .send() or
     .read() to interact with the socket.
     """
 
-    def __init__(self, host: str):
+    def __init__(self, host: str, socket_factory: SocketFactory = None):
         match = re.search('^([a-z]+)://([^/:]+)(:([0-9]+))?(/.*)$', host)
         port = 80
 
         if not match.group(1) in ['ws', 'wss']:
             raise ValueError('Websocket should start with ws:// or wss://')
 
-        if match.group(4) is not None:
-            port = int(match.group(3))
+        if not match.group(4) is None:
+            port = int(match.group(4))
         elif match.group(1) == 'wss':
             port = 443
 
@@ -366,12 +396,10 @@ class WebSocket:
         self.port = port
         self.path = match.group(5)
 
-        connection_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if socket_factory is None:
+            socket_factory = SslSocketFactory() if self.port == 443 else SocketFactory()
 
-        if self.port == 443:
-            connection_socket = ssl.wrap_socket(connection_socket)
-
-        self._socket = connection_socket
+        self._socket = socket_factory.create()
 
     def connect(self, handshake: bool = True) -> None:
         """
@@ -384,23 +412,33 @@ class WebSocket:
         if handshake:
             self.handshake()
 
-    def handshake(self) -> None:
+    def handshake(self, protocols: str = None) -> None:
         """
         Preform the handshake with the websocket.
         """
         key = SocketKey()
         codec = HttpMessageCodec()
-
-        self._send_message(HttpMessage(('GET %s HTTP/1.1' % self.path, {
+        headers = {
             'Host': self.host,
             'Upgrade': 'websocket',
+            'Origin': 'http://www.websocket.org',
             'Connection': 'Upgrade',
+            'User-Agent': 'Mozilla 5.0',
             'Sec-WebSocket-Key': key.value(),
-            'Sec-WebSocket-Protocol': 'chat, superchat',
-            'Sec-WebSocket-Version': '13'
-        }, ""), codec))
+            'Sec-WebSocket-Version': '13',
+            'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits'
+        }
+
+        if protocols is not None:
+            headers['Sec-WebSocket-Protocol'] = protocols
+
+        self._send_message(HttpMessage(('GET %s HTTP/1.1' % self.path, headers, "Hello World!"), codec))
 
         msg = HttpMessage(codec.decode(self._read_message()), codec)
+
+        if msg.status() != 200:
+            self.close()
+            raise Exception("Server responded with error %s, body: %s" % (msg.status(), msg.message()))
 
         if not key.valid(msg.header('Sec-WebSocket-Accept')):
             self.close()

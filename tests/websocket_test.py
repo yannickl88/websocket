@@ -1,6 +1,7 @@
+import socket
 import unittest
 
-from websocket import FrameMessageCodec, MaskedFrameMessageCodec, MaskFactory
+from websocket import FrameMessageCodec, MaskedFrameMessageCodec, MaskFactory, WebSocket, SocketFactory
 
 
 class MockMaskFactory(MaskFactory):
@@ -11,7 +12,40 @@ class MockMaskFactory(MaskFactory):
         return self.mask
 
 
-class TestWebsockets(unittest.TestCase):
+class MockSocket(socket.socket):
+    def connect(self, address):
+        pass
+
+    def recv(self, buffersize, flags=None):
+        pass
+
+    def send(self, data):
+        pass
+
+
+class MockSocketFactory(SocketFactory):
+    def __init__(self, mock_socket: socket):
+        self._socket = mock_socket
+
+    def create(self):
+        return self._socket
+
+
+class TestWebsocket(unittest.TestCase):
+
+    def test_socket(self):
+        mock_socket = MockSocket()
+
+        c = WebSocket('ws://localhost:1234/', MockSocketFactory(mock_socket))
+        c.connect()
+        c.send("Rock it with HTML5 WebSocket")
+        msg = c.receive()
+        c.close()
+
+        print(msg)
+
+
+class TestCodec(unittest.TestCase):
 
     def test_identity(self):
         codec = FrameMessageCodec()
@@ -26,13 +60,13 @@ class TestWebsockets(unittest.TestCase):
         self.assertEqual(msg, codec.decode(codec.encode(msg)))
 
     def test_encode(self):
-        for msg, expected, input in TestWebsockets._encode_provider():
+        for msg, expected, input in TestCodec._encode_provider():
             codec = FrameMessageCodec()
 
             self.assertEqual(expected, codec.encode(('text', input)), msg)
 
     def test_masked_encode(self):
-        for msg, expected, input, mask in TestWebsockets._masked_encode_provider():
+        for msg, expected, input, mask in TestCodec._masked_encode_provider():
             codec = MaskedFrameMessageCodec(MockMaskFactory(mask))
 
             self.assertEqual(expected, codec.encode(('text', input)), msg)
@@ -43,13 +77,13 @@ class TestWebsockets(unittest.TestCase):
         self.assertNotEqual(codec.encode(('text', 'foobar')), codec.encode(('text', 'foobar')))
 
     def test_decode(self):
-        for msg, expected, input in TestWebsockets._decode_provider():
+        for msg, expected, input in TestCodec._decode_provider():
             codec = FrameMessageCodec()
 
             self.assertEqual(expected, codec.decode(input), msg)
 
     def test_masked_decode(self):
-        for msg, expected, input in TestWebsockets._masked_decode_provider():
+        for msg, expected, input in TestCodec._masked_decode_provider():
             codec = MaskedFrameMessageCodec()
 
             self.assertEqual(expected, codec.decode(input), msg)
